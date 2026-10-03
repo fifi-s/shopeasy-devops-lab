@@ -20,12 +20,24 @@ jobs:
     - name: Install Dependencies
       run: npm install
 
+    # - name: Deploy to EC2 via SSH
+    #   uses: appleboy/ssh-action@master
+    #   with:
+    #     host: ${{ secrets.EC2_HOST }}
+    #     username: ${{ secrets.EC2_USER }}
+    #     password: ${{ secrets.EC2_PASSWORD }} # Or use ssh-key if your lab requires a private key
+    #     script: |
+    #       cd /home/${{ secrets.EC2_USER }}/shopeasy-devops-lab || mkdir -p /home/${{ secrets.EC2_USER }}/shopeasy-devops-lab
+    #       git pull origin main || git clone https://github.com/fifi-s/shopeasy-devops-lab.git .
+    #       npm install
+    #       pm2 restart app.js || pm2 start app.js
+
     - name: Deploy to EC2 via SSH
       uses: appleboy/ssh-action@master
       with:
         host: ${{ secrets.EC2_HOST }}
         username: ${{ secrets.EC2_USER }}
-        password: ${{ secrets.EC2_PASSWORD }} # Or use ssh-key if your lab requires a private key
+        key: ${{ secrets.EC2_SSH_KEY }} # Make sure you add your private key content as a secret named EC2_SSH_KEY
         script: |
           cd /home/${{ secrets.EC2_USER }}/shopeasy-devops-lab || mkdir -p /home/${{ secrets.EC2_USER }}/shopeasy-devops-lab
           git pull origin main || git clone https://github.com/fifi-s/shopeasy-devops-lab.git .
