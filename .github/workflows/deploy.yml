@@ -2,44 +2,92 @@ name: Deploy ShopEasy Application
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Code
-      uses: actions/checkout@v3
+      - name: Checkout source code
+        uses: actions/checkout@v4
 
-    - name: Set up Node.js
-      uses: actions/setup-node@v3
-      with:
-        node-version: '18'
+      - name: Validate application files
+        run: |
+          test -f index.html
+          test -f styles.css
+          test -f app.js
+          node --check app.js
+          echo "All checks passed."
 
-    - name: Install Dependencies
-      run: npm install
+      - name: Prepare server
+        uses: appleboy/ssh-action@v1
+        env:
+          EC2_PASSWORD: ${{ secrets.EC2_PASSWORD }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          password: ${{ secrets.EC2_PASSWORD }}
+          envs: EC2_PASSWORD
+          script: |
+            set -e
+            s() { echo "$EC2_PASSWORD" | sudo -S -p '' "$@"; }
 
-    # - name: Deploy to EC2 via SSH
-    #   uses: appleboy/ssh-action@master
-    #   with:
-    #     host: ${{ secrets.EC2_HOST }}
-    #     username: ${{ secrets.EC2_USER }}
-    #     password: ${{ secrets.EC2_PASSWORD }} # Or use ssh-key if your lab requires a private key
-    #     script: |
-    #       cd /home/${{ secrets.EC2_USER }}/shopeasy-devops-lab || mkdir -p /home/${{ secrets.EC2_USER }}/shopeasy-devops-lab
-    #       git pull origin main || git clone https://github.com/fifi-s/shopeasy-devops-lab.git .
-    #       npm install
-    #       pm2 restart app.js || pm2 start app.js
+            if ! command -v nginx >/dev/null 2>&1; then
+              if command -v apt-get >/dev/null 2>&1; then
+                s apt-get update -y
+                s env DEBIAN_FRONTEND=noninteractive apt-get install -y nginx
+              else
+                s dnf install -y nginx
+              fi
+            fi
 
-    - name: Deploy to EC2 via SSH
-      uses: appleboy/ssh-action@master
-      with:
-        host: ${{ secrets.EC2_HOST }}
-        username: ${{ secrets.EC2_USER }}
-        key: ${{ secrets.EC2_SSH_KEY }} # Make sure you add your private key content as a secret named EC2_SSH_KEY
-        script: |
-          cd /home/${{ secrets.EC2_USER }}/shopeasy-devops-lab || mkdir -p /home/${{ secrets.EC2_USER }}/shopeasy-devops-lab
-          git pull origin main || git clone https://github.com/fifi-s/shopeasy-devops-lab.git .
-          npm install
-          pm2 restart app.js || pm2 start app.js
+            s mkdir -p /var/www/shopeasy
+            s chown -R "$(id -un)":"$(id -gn)" /var/www/shopeasy
+
+            cat > /tmp/shopeasy.conf <<'EOF'
+            server {
+              listen 80 default_server;
+              listen [::]:80 default_server;
+              root /var/www/shopeasy;
+              index index.html;
+              server_name _;
+
+              location / {
+                try_files $uri $uri/ =404;
+              }
+            }
+            EOF
+
+            if [ -d /etc/nginx/sites-available ]; then
+              s mv /tmp/shopeasy.conf /etc/nginx/sites-available/shopeasy
+              s ln -sf /etc/nginx/sites-available/shopeasy /etc/nginx/sites-enabled/shopeasy
+              s rm -f /etc/nginx/sites-enabled/default
+            else
+              s mv /tmp/shopeasy.conf /etc/nginx/conf.d/shopeasy.conf
+            fi
+
+            s nginx -t
+            s systemctl enable --now nginx
+
+      - name: Copy application to EC2
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          password: ${{ secrets.EC2_PASSWORD }}
+          source: "index.html,styles.css,app.js"
+          target: /var/www/shopeasy
+
+      - name: Reload Nginx
+        uses: appleboy/ssh-action@v1
+        env:
+          EC2_PASSWORD: ${{ secrets.EC2_PASSWORD }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          password: ${{ secrets.EC2_PASSWORD }}
+          envs: EC2_PASSWORD
+          script: |
+            echo "$EC2_PASSWORD" | sudo -S -p '' systemctl reload nginx
